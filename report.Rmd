@@ -1,30 +1,1086 @@
 ---
 title: "Report on movie recommendation system"
 author: "Chao Wu"
-date: "2020/8/18"
+date: "2020/10/06"
 output: pdf_document
+urlcolor: blue
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
 ```
 
-## R Markdown
+# Executive summary
+This project is about building a movie recommendation system using the MovieLens dataset. We start with the methods that were provided from [previous course](https://www.edx.org/course/data-science-machine-learning). We are required to add our own analysis on top of previous methods, and the final RMSE is expected to be less than 0.86490. I added my own analysis in addition to *Regularized Movie + User Effect Model*.  
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+To achieve the project goal, I took the following steps:
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+* Generate the dataset using the code provided;
+* Perform data wrangling: convert unit in seconds in the ‘timestamp’ column into a date/time format, extract movie release year from the ‘title’ column, and check for missing values;
+* Split the edx set into training and test sets to avoid overfitting. So that I can use them to train and test intermediate models, as well as optimize the algorithm parameters;
+* Explore the dataset: plotting and visualising the data help me to understand how the data is distributed and what the relationships are between the ‘rating’ and other data columns;
+* Analyse ‘genres’, ‘review_date’, ‘release_year’ columns: there are genres, review year, and movie release year effects in these columns that can improve the *Regularized Movie + User Effect Model*;
+* Analyse regularization: by adding penalty term lambda to regularize the genres, review year, and movie release year effects, the model has been further improved;
+* Test the final model using the final hold-out test set.
 
-```{r cars}
-summary(cars)
+The final model is *Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model*. This model adds regularized genres, review year, and movie release year effects, in addition to the *Regularized Movie + User Effect Model*. The final model has been evaluated using the final hold-out test set and the final RMSE achieves the project goal. Errors are reduced by adding more effects to the model, but the model becomes slower.  
+
+There are some limitations on the final model, as it doesn’t count for the important fact that existing relationships or similarity between movies and users. To further improve the final model, I might consider building a hybrid model of combining a content-based filtering model with a collaborative filtering model using matrix factorization and principal component analysis (PCA) or singular value decomposition (SVD).  
+  
+# Introduction and Objectives
+This project is about to create a movie recommendation system using the 10M version of the MovieLens dataset with “10 million ratings and 100,000 tag applications applied to 10,000 movies by 72,000 users” (“MovieLens 10M Dataset,” 2009). The link of MovieLens 10M Dataset is: http://grouplens.org/datasets/movielens/10m/.  
+
+This project is built in addition to the *Regularized Movie + User Effect Model* that was provided from [previous course](https://www.edx.org/course/data-science-machine-learning) for recommendation systems which “use ratings that users have given items to make specific recommendations.” (Irizarry 2020).  
+
+We use root mean squared error (RMSE) as our loss function, to compare with different models and to see how well each model does.  
+```{r echo=FALSE}  
+RMSE <- function(true_ratings, predicted_ratings){
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+  }
+```
+The objectives of this project are to create a model to predict the movie ratings by adding our own analysis; and we expect the RMSE from the final hold-out test set to be less than 0.86490 when evaluating the final model.  
+  
+# Library
+In this project, I used the following R libraries:  
+```{r eval=FALSE}
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+```
+```{r echo=FALSE}
+library(lubridate)
+```
+  
+# Data extraction
+
+## Data extraction:
+To generate the dataset, the course provided the following code:  
+```{r}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 4.0 or later
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                            title = as.character(title),
+                                            genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+      semi_join(edx, by = "movieId") %>%
+      semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+  
+## The edx set and validation set:
+The code provided from the course has already separated the whole dataset into edx set and validation set. The edx set is treated as training set. The validation set is the final hold-out test set. I used validation set to evaluate the final model. It is expected to report RMSE from the validation set to be less than 0.86490.  
+  
+# Data cleansing and wrangling
+
+## The edx set:
+From the table below, we can see what the dataset looks like. Each data row represents a rating provided by a user to a movie. The ‘genres’ column consists of combinations of genres where a movie being rated falls under. The ‘timestamp’ column is the unit in seconds since January 1, 1970 to the movie being rated. The ‘title’ column consists the movie title and the movie release year.  
+```{r echo=FALSE}
+edx %>% as_tibble()
+```
+  
+## Data wrangling:
+As the unit of the ‘timestamp’ column is in seconds, to make it meaningful and understandable, I converted it to a date/time format and saved it into a new column ‘review_date’.  
+
+To be able to analyse movie release year, I extracted the movie release year from the ‘title’ column and saved it into a new column ‘release_year’.  
+
+I performed these data wrangling actions in both edx and validation sets.  
+
+In edx set, these two columns look like the following:  
+```{r echo=FALSE}
+# Convert the timestamp in the timestamp column to a date in the edx and validation datasets, and create a new column 'review_date' with the date
+edx <- mutate(edx, review_date = as_datetime(timestamp))
+validation <- mutate(validation, review_date = as_datetime(timestamp))
+
+# Extract movie release year from the title column in the edx and validation datasets, and create a new column 'release_year' with the year
+edx <- mutate(edx, release_year = parse_number(str_extract(title, "\\([0-9]{4}\\)")))
+validation <- mutate(validation, release_year = parse_number(str_extract(title, "\\([0-9]{4}\\)")))
+
+# Look at two new columns after wrangling
+edx %>% select(review_date, release_year) %>% as_tibble()
+```
+  
+## Missing values:
+There is `r sum(is.na(edx))` missing value in edx set and `r sum(is.na(validation))` missing value in validation set, which means we don’t need to fill in any values.  
+  
+# Dataset and Exploration
+
+## Training set and test set:
+To avoid overfitting, I further split the edx set into training set and test set. I train and test intermediate models, as well as optimize the algorithm parameters, only using training set and test set that are split from the edx set. The test set is 20% of the edx set, and the rest becomes training set.  
+```{r echo=FALSE}  
+set.seed(755)
+
+# Test set will be 20% of edx set
+# Training set will be 80% of edx set
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.2, 
+                                  list = FALSE)
+train_set <- edx[-test_index,]
+test_set <- edx[test_index,]
+
+# To make sure we don't include users and movies in the test set that do not appear in the training set, 
+# we removed these using the semi_join function
+test_set <- test_set %>% 
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+```
+  
+## Data exploration:
+To help me understand the data a bit more, I plot to visualise how the data is distributed and what the relationships are between the ‘rating’ and other data columns.  
+
+The average rating of all movies across all users in the edx dataset is:  
+```{r echo=FALSE}
+mean(edx$rating)
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+There is not zero was given as rating in the edx dataset.  
+```{r echo=FALSE}
+edx %>% filter(rating == 0) %>% summarize(count = n()) %>% pull(count)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+The most popular rating given by users is 4. Below are the five most given ratings in order from most to least.  
+```{r echo=FALSE}
+edx %>% group_by(rating) %>% summarize (count = n()) %>% top_n(5) %>% arrange(desc(count))
+```
+
+Half star ratings are less common than whole star ratings.  
+```{r echo=FALSE}
+edx %>% 
+	group_by(rating) %>%
+	summarize(count = n()) %>%
+	ggplot(aes(x=rating, y=count)) + geom_line()
+```
+
+Movie “Pulp Fiction” has the greatest number of ratings.  
+```{r echo=FALSE}
+edx %>% group_by(movieId, title) %>%
+	summarize(count = n()) %>%
+	arrange (desc(count))
+```
+
+The table below shows the number of unique users that provide ratings, for how many unique movies they provided, and the number of unique genres in the edx set. It shows that a movie can be rated by a number of users, a user can rate a number of movies. In the ‘genres’ column, if we treat the combination of genres in each data row as a big genre, then there are over 700 genres in that column.  
+```{r echo=FALSE}
+edx %>%
+     summarize(n_users = n_distinct(userId),
+               n_movies = n_distinct(movieId),
+			   n_genres = n_distinct(genres))
+```
+
+From Figure 1.1, we can see that different movies have been rated differently.  
+```{r echo=FALSE}
+edx %>% 
+     dplyr::count(movieId) %>% 
+     ggplot(aes(n)) + 
+     geom_histogram(bins = 30, color = "black") + 
+     scale_x_log10() + 
+	 xlab("number of ratings (log scale)") +
+	 ylab("number of movies") +
+     ggtitle("Movies")
+```
+(Figure 1.1)  
+
+From Figure 1.2, we can see that different users rated movies differently.  
+```{r echo=FALSE}
+edx %>%
+     dplyr::count(userId) %>% 
+     ggplot(aes(n)) + 
+     geom_histogram(bins = 30, color = "black") + 
+     scale_x_log10() +
+	 xlab("number of ratings (log scale)") +
+	 ylab("number of users") +
+     ggtitle("Users")
+```
+(Figure 1.2)  
+  
+# Analysis
+
+## Methods/models provided from previous course:
+Our previous course provided four methods step by step.
+
+### Method 1: Just the average  
+We start with a method that assumes the same rating for all movies and all users, with all the differences explained by random variation. The method can be represented like this:  
+
+Y_ui = mu + error_ui  
+
+Where:  
+
+* mu is the average rating of all movies across all users;
+* error_ui is independent errors sampled from the same distribution centered at zero.  
+
+The RMSE result shows how well this model does.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Method 1: Just the average
+#
+##########################################################################################################
+# The average rating of all movies across all users
+mu_hat <- mean(train_set$rating)
+
+# evaluate the model
+naive_rmse <- RMSE(test_set$rating, mu_hat)
+
+# Create a table to store the results that we obtain
+rmse_results <- tibble(Method = "Just the average", 
+						Test_on = "test set",
+						Parameter = "NA",
+						Value = "NA",
+						RMSE = naive_rmse)
+rmse_results %>% knitr::kable()
+```
+  
+### Method 2: Movie Effect Model
+By analysing the ‘movieId’ column, we know that different movies are rated differently (Figure 1.1). We added movie effect in addition to *Method 1: Just the average* to improve it. The new method can be represented like this:  
+
+Y_ui = mu + b_i + error_ui  
+
+Where b_i is the average rating for movie i, the least squares estimates.  
+
+The RMSE results show that *Method 2: Movie Effect Model* improves *Method 1: Just the average*.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Method 2: Movie Effect Model
+#
+##########################################################################################################
+mu <- mean(train_set$rating) 
+
+# Movie effect: compute the least squares estimate
+# b_i: the average rating for movie i
+movie_avgs <- train_set %>% 
+     group_by(movieId) %>% 
+     summarize(b_i = mean(rating - mu))
+
+# predict the rating using test set
+predicted_ratings <- mu + test_set %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     pull(b_i)
+
+# evaluate the model
+model_2_rmse <- RMSE(test_set$rating, predicted_ratings)
+
+# Add this model result to the table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method= "Movie Effect Model",
+								Test_on = "test set",
+								Parameter = "NA",
+								Value = "NA",
+                                RMSE = model_2_rmse))
+rmse_results %>% knitr::kable()
+```
+  
+### Method 3: Movie + User Effects Model
+By analysing the ‘userId’ column, we know that different users rated movies differently (Figure 1.2). We added user effect in addition to *Method 2: Movie Effect Model* to improve it. The new method can be represented like this:  
+
+Y_ui = mu + b_i + b_u + error_ui  
+
+Where b_u is the average rating by user u to movie i, the least squares estimates.  
+
+The RMSE results show that *Method 3: Movie + User Effects Model* improves *Method 2: Movie Effect Model*.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Method 3: Movie + User Effects Model
+# This model adds user effect to the Movie effect model above.
+#
+##########################################################################################################
+# User effect: by taking the average of the residuals obtained after removing the overall mean and the movie effect from the ratings
+# b_u: the average rating for movie i by user u
+user_avgs <- train_set %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     group_by(userId) %>%
+     summarize(b_u = mean(rating - mu - b_i))
+
+# predict the rating using test set	 
+predicted_ratings <- test_set %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     mutate(pred = mu + b_i + b_u) %>%
+     pull(pred)
+
+# evaluate the model
+model_3_rmse <- RMSE(test_set$rating, predicted_ratings)
+
+# Add this model result to the table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Movie + User Effects Model",  
+                                Test_on = "test set",
+								Parameter = "NA",
+								Value = "NA",
+								RMSE = model_3_rmse))
+rmse_results %>% knitr::kable()
+```
+  
+### Method 4: Regularized Movie + User Effect Model
+Regularization is introduced to improve *Method 3: Movie + User Effects Model*. “Regularization constrains the total variability of the effect sizes by penalizing large estimates that come from small sample sizes.” (Irizarry 2020). For example, when the best or worst movies were rated by a small number of users, it is more likely to have larger estimates of movie effects. These estimates are noisy estimates that we should eliminate in our model. The new method can be represented like this:  
+
+Y_ui = mu + reg(b_i) + reg(b_u) + error_ui
+
+Where reg(b_i) and reg(b_u) are the penalized estimates of movie and user effects, respectively.  
+
+By adding the penalty term lambda to the movie and user effects, regularized estimates largely improve least squares estimates.  
+
+The RMSE results approves that *Method 4: Regularized Movie + User Effect Model* improves *Method 3: Movie + User Effects Model*.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Method 4: Regularized Movie + User Effect Model
+# Adding penalty term: parameter lambda, by penalizing large estimates that come from small sample sizes.
+#
+##########################################################################################################
+# Use training set and test set to optimize the parameter lambda
+lambdas_model4 <- seq(0, 10, 0.5)
+
+model_4_rmse <- sapply(lambdas_model4, function(l){
+
+  mu <- mean(train_set$rating)
+  
+  # regularized movie effect
+  b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  # regularized user effect
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+
+  # predict the rating using test set
+  predicted_ratings <- test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    pull(pred)
+  
+  # evaluate the model
+  return(RMSE(test_set$rating, predicted_ratings))
+})
+
+# Find the lambda that give the lowest RMSE
+lambda_model4 <- lambdas_model4[which.min(model_4_rmse)]
+
+# Add the lowest RMSE to the result table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Regularized Movie + User Effect Model",  
+                                 Test_on = "test set",
+								 Parameter = "lambda",
+								 Value = as.character(lambda_model4),
+								 RMSE = min(model_4_rmse)))
+rmse_results %>% knitr::kable()
+```
+  
+## Analysis on genres, review date, and release year:
+I start my analysis from *Method 4: Regularized Movie + User Effect Model*. To further improve this method, I analysed the ‘genres’, ‘review_date’, and ‘release_year’ columns.  
+  
+### Looking at ‘genres’ column
+I treat the combination of genres in each data row as a big genre. From Figure 1.3, we can see that different number of ratings are in different genres.  
+```{r echo=FALSE}
+edx %>%
+     dplyr::count(genres) %>% 
+     ggplot(aes(n)) + 
+     geom_histogram(bins = 30, color = "black") + 
+     scale_x_log10() +
+	 xlab("number of ratings (log scale)") +
+	 ylab("number of genres") +
+     ggtitle("Genres")
+```
+(Figure 1.3)  
+  
+I compute the average rating for each genre and plot this average against each genre. Figure 1.4 shows a strong genres effect between genres and the average ratings.  
+```{r echo=FALSE}
+edx %>% group_by(genres) %>%
+  summarize(n = n(), avg = mean(rating)) %>%
+  filter(n >= 30000) %>% 
+  mutate(genres = reorder(genres, avg)) %>%
+  ggplot(aes(genres, avg)) + 
+  geom_point() +
+  theme(axis.text.x=element_text(angle=90,hjust=1)) 
+```
+(Figure 1.4, as there are more than 700 genres, to make the labels in the x-axis readable, the figure only shows the genres with greater than or equal to 30000 ratings.)  
+  
+### Looking at ‘review_date’ column
+I compute the average rating for each week and plot this average against date. The plot in Figure 1.5 shows some effect of time, but not a strong effect, if I only look at the cluster that most of the data points group together.  
+```{r echo=FALSE}
+edx %>% mutate(review_date = round_date(review_date, unit = "week")) %>%
+	group_by(review_date) %>%
+	summarize(avg = mean(rating)) %>%
+	ggplot(aes(review_date, avg)) +
+	geom_point() +
+	geom_smooth(method = "loess", span = 0.15, method.args = list(degree=1))
+```
+(Figure 1.5)  
+  
+I also look at each year in the ‘review_date’ column. Figure 1.6 shows that there are a lot of ratings given in some years, but there are only a few ratings in a particular year. There are big intervals among different years.  
+```{r echo=FALSE}
+edx %>%
+     dplyr::count(review_year = year(review_date)) %>% 
+     ggplot(aes(n)) + 
+     geom_histogram(bins = 30, color = "black") + 
+     scale_x_log10() +
+	 xlab("number of ratings (log scale)") +
+	 ylab("number of years") +
+     ggtitle("Review Years")
+```
+(Figure 1.6)  
+  
+I compute the average rating and standard error for each review year and plot this average against year. The plot in Figure 1.7 shows some effect of review year.  
+```{r echo=FALSE}
+edx %>% mutate(review_year = year(review_date)) %>% 
+  group_by(review_year) %>% 
+  summarize(n=n(), avg=mean(rating),se=sd(rating)/sqrt(n()))%>%
+  filter(n >= 1000) %>%
+  mutate(review_year = reorder(review_year,avg)) %>%
+  ggplot(aes(x=review_year, y=avg, ymin=avg-2*se, ymax=avg+2*se)) + 
+  geom_point() + 
+  geom_errorbar() + 
+  theme(axis.text.x=element_text(angle=45,hjust=1))
+```
+(Figure 1.7, as there are more than 20 different years, to make the labels in the x-axis readable, the figure only shows the years with greater than or equal to 1000 ratings.)  
+  
+### Looking at ‘release_year’ column
+I compute the number of ratings for each movie and then plot it against the year the movie came out. From Figure 1.8, we can see that, movies that came out after 1993 get more ratings. But starting in 1993, the number of ratings decreases with year.   
+```{r echo=FALSE}
+edx %>% group_by(movieId) %>%
+  summarize(n = n(), year = as.character(first(release_year))) %>%
+  qplot(year, n, data = ., geom = "boxplot") +
+  coord_trans(y = "sqrt") +
+  scale_x_discrete(breaks=seq(min(edx$release_year),max(edx$release_year),4)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+(Figure 1.8)  
+  
+The table below shows the top 25 movies with the highest average number of ratings per year. The more recent a movie is, the less time users have had to rate it.  
+```{r echo=FALSE}
+edx %>% 
+	filter(release_year >= 1993) %>%
+	group_by(movieId) %>%
+	summarize(n = n(), years = 2019 - first(release_year),
+				rating = mean(rating)) %>%
+	mutate(rate = n/years) %>%
+	top_n(25, rate) %>%
+	arrange(desc(rate))
+```
+  
+From Figure 1.9, we can see that the most frequently rated movies have above average ratings. As more people watch popular movies. The plot shows strong effect of movie release year.  
+```{r echo=FALSE}
+edx %>% 
+	filter(release_year >= 1993) %>%
+	group_by(movieId) %>%
+	summarize(n = n(), years = 2019 - first(release_year),
+				rating = mean(rating)) %>%
+	mutate(rate = n/years) %>%
+	ggplot(aes(rate, rating)) +
+	geom_point() +
+	geom_smooth()
+```
+(Figure 1.9)  
+  
+### Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model
+From the analysis above, the data shows genres, review year, and movie release year effects. After adding the genres, review year, and movie release year effects to *Method 4: Regularized Movie + User Effect Model*, the new method can be represented like this:  
+
+Y_ui = mu + reg(b_i) + reg(b_u) + b_g + b_t + b_y + error_ui
+
+Where: 
+
+* b_g is the average rating by user u to movie i in genre g, the least squares estimates;
+* b_t is the average rating by user u to movie i in genre g rated in year t, the least squares estimates; 
+* b_y is the average rating by user u to movie i released in year y in genre g in year t, the least squares estimates.  
+
+The RMSE results show that *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model* improves *Method 4: Regularized Movie + User Effect Model*.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model
+# This model is additional to the Regularized Movie + User Effect Model above.
+# Adding Genres + Review Year + Movie Release Year effect.
+#
+##########################################################################################################
+# Use training set and test set to optimize the parameter lambda
+lambdas_model5 <- seq(0, 10, 0.5)
+
+model_5_rmse <- sapply(lambdas_model5, function(l){
+
+  mu <- mean(train_set$rating)
+  
+  # regularized movie effect
+  b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  # regularized user effect
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+
+  # genre effect:
+  # by taking the average of the residuals obtained after removing the overall mean, movie, and user effect from the ratings
+  genres_avgs <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = mean(rating - mu - b_i - b_u))
+  
+  # review year effect: 
+  # by taking the average of the residuals obtained after removing the overall mean, movie, user, and genres effect from the ratings
+  review_year_avgs <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = mean(rating - mu - b_i - b_u - b_g))
+	
+  # movie release year effect: 
+  # by taking the average of the residuals obtained after removing the overall mean, movie, user, genres, and review year effect from the ratings	
+  release_year_avgs <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+	left_join(review_year_avgs, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = mean(rating - mu - b_i - b_u - b_g - b_t))
+	
+  # predict the rating using test set
+  predicted_ratings <- test_set %>% 
+	mutate(review_year = year(review_date)) %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+	left_join(review_year_avgs, by = "review_year") %>%
+	left_join(release_year_avgs, by = "release_year") %>%
+    mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+    pull(pred)
+  
+  # evaluate the model
+  return(RMSE(test_set$rating, predicted_ratings))
+})
+
+# Find the lambda that give the lowest RMSE
+lambda_model5 <- lambdas_model5[which.min(model_5_rmse)]
+
+# Add the lowest RMSE to the result table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="(Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model",  
+                                     Test_on = "test set",
+									 Parameter = "lambda",
+									 Value = as.character(lambda_model5),
+									 RMSE = min(model_5_rmse)))
+rmse_results %>% knitr::kable()
+```
+  
+## Regularization:
+To see whether regularization can improve *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model* even further and by how much the method can be improved, I analysed regularization on genres, review year, and movie release year effects, separately.  
+  
+### Adding regularization to genres effect:
+I added penalty term lambda to regularize the genres effect. To compare RMSE with *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model*, I used the lambda value that gave the lowest RMSE to the model of Method 5. From Figure 2.0, we can see that when n is small, the values are shrinking more towards zero. The RMSE result approves that regularized estimates of genres effect improves the least squares estimates.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Analysis on regularization on Genres effect
+# Build on Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year effect Model
+# Adding penalty term: parameter lambda
+#
+##########################################################################################################
+
+# start with a fixed value
+lambda <- lambda_model5
+mu <- mean(train_set$rating)
+
+# regularized movie effect
+b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+lambda))
+  
+# regularized user effect
+b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+lambda))
+
+# genres average effect
+genres_avgs <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = mean(rating - mu - b_i - b_u))
+
+# regularized genres effect	
+genres_reg_avgs <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+    summarize(b_g = sum(rating - mu - b_i - b_u)/(n()+lambda), n_i = n()) 
+
+# review year average effect
+review_year_avgs <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_reg_avgs, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = mean(rating - mu - b_i - b_u - b_g))
+
+# movie release year average effect 
+release_year_avgs <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_reg_avgs, by = "genres") %>%
+	left_join(review_year_avgs, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = mean(rating - mu - b_i - b_u - b_g - b_t))
+	
+# plot the regularization effect using genres average results and regularized effect result
+tibble(original = genres_avgs$b_g, 
+        regularlized = genres_reg_avgs$b_g, 
+        n = genres_reg_avgs$n_i) %>%
+		ggplot(aes(original, regularlized, size=sqrt(n))) + 
+		geom_point(shape=1, alpha=0.5)
+
+# predict ratings using regularized genres effect
+reg_genres_predicted_ratings <- test_set %>% 
+			mutate(review_year = year(review_date)) %>%
+			left_join(b_i, by = "movieId") %>%
+			left_join(b_u, by = "userId") %>%
+			left_join(genres_reg_avgs, by = "genres") %>%
+			left_join(review_year_avgs, by = "review_year") %>%
+			left_join(release_year_avgs, by = "release_year") %>%
+			mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+			pull(pred)
+
+# obtain the result
+reg_genres_rmse <- RMSE(test_set$rating, reg_genres_predicted_ratings)
+
+# show results to compare genres effect without and with regularization
+reg_rmse_results <- tibble(Method = "Genres average effect", 
+					RMSE = min(model_5_rmse))
+reg_rmse_results <- bind_rows(reg_rmse_results,
+                    tibble(Method="Regularized Genres effect",  
+					RMSE = reg_genres_rmse))
+reg_rmse_results %>% knitr::kable()
+```
+(Figure 2.0)  
+  
+### Adding regularization to review year effect:
+I added the penalty term lambda to regularize the review year effect, like what I did to the genres effect. From Figure 2.1, we don’t see a regularized effect as strong as the regularized genres effect. The RMSE result approves that regularization has minor impact on the review year effect.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Analysis on regularization on Review Year effect
+# Build on Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year effect Model
+# Adding penalty term: parameter lambda
+#
+##########################################################################################################
+
+# start with a fixed value
+lambda <- lambda_model5
+mu <- mean(train_set$rating)
+
+# regularized movie effect
+b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+lambda))
+  
+# regularized user effect
+b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+lambda))
+
+# genres average effect
+genres_avgs <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = mean(rating - mu - b_i - b_u))
+
+# review year average effect
+review_year_avgs <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = mean(rating - mu - b_i - b_u - b_g))
+
+# regularized review year effect
+review_year_reg_avgs <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = sum(rating - b_i - b_u - b_g - mu)/(n()+lambda), n_i = n())
+
+# movie release year average effect 
+release_year_avgs <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+	left_join(review_year_reg_avgs, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = mean(rating - mu - b_i - b_u - b_g - b_t))
+
+# plot the regularization effect using review year average results and regularized effect result
+tibble(original = review_year_avgs$b_t, 
+        regularlized = review_year_reg_avgs$b_t, 
+        n = review_year_reg_avgs$n_i) %>%
+		ggplot(aes(original, regularlized, size=n)) + 
+		geom_point(shape=1, alpha=0.5)
+
+# predict ratings using regularized review year effect
+reg_review_year_predicted_ratings <- test_set %>% 
+			mutate(review_year = year(review_date)) %>%
+			left_join(b_i, by = "movieId") %>%
+			left_join(b_u, by = "userId") %>%
+			left_join(genres_avgs, by = "genres") %>%
+			left_join(review_year_reg_avgs, by = "review_year") %>%
+			left_join(release_year_avgs, by = "release_year") %>%
+			mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+			pull(pred)
+
+# obtain the result
+reg_review_year_rmse <- RMSE(test_set$rating, reg_review_year_predicted_ratings)
+
+# show results to compare review year effect without and with regularization
+reg_rmse_results <- tibble(Method = "Review Year average effect", 
+					RMSE = min(model_5_rmse))
+reg_rmse_results <- bind_rows(reg_rmse_results,
+                    tibble(Method="Regularized Review Year effect",  
+					RMSE = reg_review_year_rmse))
+reg_rmse_results %>% knitr::kable()
+```
+(Figure 2.1)  
+
+### Adding regularization to movie release year effect:
+I added the penalty term lambda to regularize the movie release year effect, like what I did to the genres effect. From Figure 2.2, we can see that a few data points with small n move towards zero. The RMSE result approves that regularized estimates of movie release year effect improves the least squares estimates.  
+```{r echo=FALSE}
+##########################################################################################################
+#
+# Analysis on regularization on Movie Release Year effect
+# Build on Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year effect Model
+# Adding penalty term: parameter lambda
+#
+##########################################################################################################
+
+# start with a fixed value
+lambda <- lambda_model5
+mu <- mean(train_set$rating)
+
+# regularized movie effect
+b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+lambda))
+  
+# regularized user effect
+b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+lambda))
+
+# genres average effect
+genres_avgs <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = mean(rating - mu - b_i - b_u))
+
+# review year average effect
+review_year_avgs <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = mean(rating - mu - b_i - b_u - b_g))
+
+# movie release year average effect 
+release_year_avgs <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+	left_join(review_year_avgs, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = mean(rating - mu - b_i - b_u - b_g - b_t))
+
+# regularized movie release year effect
+release_year_reg_avgs <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(genres_avgs, by = "genres") %>%
+	left_join(review_year_avgs, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = sum(rating - mu - b_i - b_u - b_g - b_t)/(n()+lambda), n_i = n())
+
+# plot the regularization effect using release year average results and regularized result
+tibble(original = release_year_avgs$b_y, 
+        regularlized = release_year_reg_avgs$b_y, 
+        n = release_year_reg_avgs$n_i) %>%
+		ggplot(aes(original, regularlized, size=n)) + 
+		geom_point(shape=1, alpha=0.5)
+
+# predict ratings using regularized release year effect
+reg_release_year_predicted_ratings <- test_set %>% 
+			mutate(review_year = year(review_date)) %>%
+			left_join(b_i, by = "movieId") %>%
+			left_join(b_u, by = "userId") %>%
+			left_join(genres_avgs, by = "genres") %>%
+			left_join(review_year_avgs, by = "review_year") %>%
+			left_join(release_year_reg_avgs, by = "release_year") %>%
+			mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+			pull(pred)
+
+# obtain the result
+reg_release_year_rmse <- RMSE(test_set$rating, reg_release_year_predicted_ratings)
+
+# show results to compare release year effect without and with regularization
+reg_rmse_results <- tibble(Method = "Release Year average effect", 
+					RMSE = min(model_5_rmse))
+reg_rmse_results <- bind_rows(reg_rmse_results,
+                    tibble(Method="Regularized Release Year effect",  
+					RMSE = reg_release_year_rmse))
+reg_rmse_results %>% knitr::kable()
+```
+(Figure 2.2)  
+  
+### Method 6: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model
+The regularization analysis approves that *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model* can be further improved by applying regularization to the genres, review year, and movie release year effects. The new method can be represented like this:  
+
+Y_ui = mu + reg(b_i) + reg(b_u) + reg(b_g) + reg(b_t) + reg(b_y) + error_ui
+
+Where reg(b_g), reg(b_t), and reg(b_y) are the penalized estimates of genres, review year, and movie release year effects, respectively.  
+
+The RMSE results show that *Method 6: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model* improves *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model*.  
+```{r echo=FALSE}
+# Use training set and test set to optimize the parameter lambda that will give lowest RMSE
+lambdas_model6 <- seq(0, 10, 0.5)
+
+model_6_rmse <- sapply(lambdas_model6, function(l){
+  mu <- mean(train_set$rating)
+  
+  # regularized movie effect
+  b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  # regularized user effect
+  b_u <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+	
+  # regularized genres effect
+  b_g <- train_set %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = sum(rating - mu - b_i - b_u)/(n()+l))
+  
+  # regularized review year effect
+  b_t <- train_set %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = sum(rating - b_i - b_u - b_g - mu)/(n()+l))
+	
+  # regularized movie release year effect
+  b_y <- train_set %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+	left_join(b_t, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = sum(rating - mu - b_i - b_u - b_g - b_t)/(n()+l))
+	
+  # predict the rating using test set
+  predicted_ratings <- test_set %>% 
+	mutate(review_year = year(review_date)) %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+	left_join(b_t, by = "review_year") %>%
+	left_join(b_y, by = "release_year") %>%
+    mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+    pull(pred)
+  
+ # evaluate the model
+ return(RMSE(test_set$rating, predicted_ratings))
+})
+
+# Find the lambda that give the lowest RMSE
+lambda_model6 <- lambdas_model6[which.min(model_6_rmse)]
+
+# Add the lowest RMSE to the result table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model",  
+                                 Test_on = "test set",
+								 Parameter = "lambda",
+								 Value = as.character(lambda_model6),
+								 RMSE = min(model_6_rmse)))
+rmse_results %>% knitr::kable()
+```
+  
+## Parameter tuning:
+The penalty term lambda is a tuning parameter. I use cross-validation to choose it. To avoid overfitting, I have further split the edx set into training and test sets, and do the following steps: 
+
+* generate a sequence of lambda;
+* train an intermediate model using the training set and a lambda in the sequence;
+* generate the predicted ratings using the test set;
+* calculate RMSE using the predicted ratings and the true ratings from the ‘rating’ column in the test set;
+* repeat the steps of training and prediction for each lambda in the sequence;
+* finally, pick up the lambda that minimises the RMSE.  
+
+The minimised RMSE for that intermediate model will be used to compare with other intermediate models.  
+  
+## Final model:
+The RMSE results show that model of *Method 6: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model* gives the lowest RMSE. So, the final model is *Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model*.  
+
+The method of the final model can be represented like this:  
+
+Y_ui = mu + reg(b_i) + reg(b_u) + reg(b_g) + reg(b_t) + reg(b_y) + error_ui
+
+Where: 
+
+* mu is the average rating of all movies across all users;
+* reg(b_i), reg(b_u), reg(b_g), reg(b_t), and reg(b_y) are the penalized estimates of movie, user, genres, review year, and movie release year effects, respectively;
+* error_ui is independent errors sampled from the same distribution centered at zero.
+
+In the final model, I used the whole edx set as training set, and the validation set as test set. The parameter lambda is generated from the model of *Method 6: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model*, that has been optimised for that model.  
+  
+# Results and Performance
+
+## Final RMSE:
+To calculate the final RMSE, I used the ‘rating’ column from the validation set as true ratings to compare with the predicted ratings from the final model. 
+
+The last RMSE result shows that the final RMSE is less than 0.86490. This implies that the final model meets the project goal.  
+```{r echo=FALSE}
+mu <- mean(edx$rating)
+  
+# regularized movie effect
+b_i <- edx %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+lambda_model6))
+  
+# regularized user effect
+b_u <- edx %>% 
+    left_join(b_i, by = "movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+lambda_model6))
+	
+# regularized genre effect
+b_g <- edx %>% 
+    left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+    group_by(genres) %>%
+	summarize(b_g = sum(rating - b_i - b_u - mu)/(n()+lambda_model6))
+  
+# regularized review year effect
+b_t <- edx %>% 
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+    group_by(review_year) %>%
+	summarize(b_t = sum(rating - b_i - b_u - b_g - mu)/(n()+lambda_model6))
+
+# regularized movie release year effect
+b_y <- edx %>%
+    mutate(review_year = year(review_date)) %>%
+	left_join(b_i, by = "movieId") %>%
+	left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+	left_join(b_t, by = "review_year") %>%
+    group_by(release_year) %>%
+	summarize(b_y = sum(rating - mu - b_i - b_u - b_g - b_t)/(n()+lambda_model6))
+	
+# predict the rating using validation set
+predicted_ratings <- validation %>% 
+	mutate(review_year = year(review_date)) %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+	left_join(b_g, by = "genres") %>%
+	left_join(b_t, by = "review_year") %>%
+	left_join(b_y, by = "release_year") %>%
+    mutate(pred = mu + b_i + b_u + b_g + b_t + b_y) %>%
+    pull(pred)
+
+# evaluate the model
+final_model_rmse <- RMSE(validation$rating, predicted_ratings)
+
+# Add this model result to the table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Final model: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model",  
+                                 Test_on = "validation set",
+								 Parameter = "lambda",
+								 Value = as.character(lambda_model6),
+								 RMSE = final_model_rmse))
+rmse_results %>% knitr::kable()
+```
+  
+## Performance:
+RMSE has been reduced by adding more effects to the model. Regularization also improves the model. However, the more effects add to the model, the slower the model is. *Method 6: Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model* improves *Method 4: Regularized Movie + User Effect Model*, but the model of Method 6 is slower than of Method 4.  
+  
+# Conclusion
+
+## Limitations:
+There are limitations on the final model. The final model doesn’t count for the important fact that existing relationships or similarity between movies and users. For example, some users might rate something similar; users might have their preferences and tastes; some movies might have similar rating patterns.  
+
+## Future work:
+To further improve the final model, there are a few methods to be considered:  
+
+* Building a collaborative filtering model using matrix factorization: this relates to factor analysis; we try to explain more of variance by analysing vectors of factors. PCA or SVD can be used to estimate factors from the data. The limitation of this model would be due to data sparsity, for example, some users only rate a few numbers of movies.
+* Building a content-based filtering model based on user’s preferences and tastes, this type of model could solve data sparsity issue. 
+* Building an ensemble or hybrid model that combine multiple models into one model to improve predictions.  
+  
+## Conclusion:
+This project is built in addition to the *Regularized Movie + User Effect Model*. I generated the dataset; converted data into a different format; plotted to visualise the data; and split the edx set into training and test sets. I used these training and test sets to train and test intermediate models, and also optimise the tuning parameter lambda. By analysing the ‘genres’, ‘review_date’, ‘release_year’ columns, I found out that there are genres, review year, and movie release year effects in these columns. I added genres, review year, and movie release year effects to the model; and then applied regularization to these effects. The final model is *Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model*. The RMSE results from intermediate models approve that the *Regularized Movie + User Effect Model* has been improved. The final RMSE from the final model is less than 0.86490, which meets the project goal. To further improve the final model, I might consider a hybrid model of combining a content-based filtering model with matrix factorization and PCA or SVD.  
+  
+# References
+*MovieLens 10M Dataset*. (2009, January). Retrieved from grouplens: https://grouplens.org/datasets/movielens/10m/  
+Irizarry, R. A. (2020, September 06). Retrieved from Github: https://rafalab.github.io/dsbook/large-datasets.html#recommendation-systems  
