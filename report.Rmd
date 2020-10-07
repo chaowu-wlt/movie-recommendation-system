@@ -612,7 +612,7 @@ rmse_results %>% knitr::kable()
 To see whether regularization can improve *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model* even further and by how much the method can be improved, I analysed regularization on genres, review year, and movie release year effects, separately.  
   
 ### Adding regularization to genres effect:
-I added penalty term lambda to regularize the genres effect. To compare RMSE with *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model*, I used the lambda value that gave the lowest RMSE to the model of Method 5. From Figure 2.0, we can see that when n is small, the values are shrinking more towards zero. The RMSE result approves that regularized estimates of genres effect improves the least squares estimates.  
+I added penalty term lambda to regularize the genres effect. To compare this method with *Method 5: (Regularized Movie + User) + Genres + Review Year + Movie Release Year Effect Model* using RMSE, I used the lambda value that gave the lowest RMSE to the model of Method 5. From Figure 2.0, we can see that when n is small, the values are shrinking more towards zero. The RMSE result approves that regularized estimates of genres effect improves the least squares estimates.  
 ```{r echo=FALSE}
 ##########################################################################################################
 #
@@ -702,7 +702,7 @@ reg_rmse_results %>% knitr::kable()
 (Figure 2.0)  
   
 ### Adding regularization to review year effect:
-I added the penalty term lambda to regularize the review year effect, like what I did to the genres effect. From Figure 2.1, we don’t see a regularized effect as strong as the regularized genres effect. The RMSE result approves that regularization has minor impact on the review year effect.  
+I added the penalty term lambda to regularize the review year effect, like what I did to the genres effect. From Figure 2.1, we can see that regularization has very minor (almost no) impact on the review year effect. The RMSE result approves this.  
 ```{r echo=FALSE}
 ##########################################################################################################
 #
@@ -794,7 +794,7 @@ reg_rmse_results %>% knitr::kable()
 (Figure 2.1)  
 
 ### Adding regularization to movie release year effect:
-I added the penalty term lambda to regularize the movie release year effect, like what I did to the genres effect. From Figure 2.2, we can see that a few data points with small n move towards zero. The RMSE result approves that regularized estimates of movie release year effect improves the least squares estimates.  
+I added the penalty term lambda to regularize the movie release year effect, like what I did to the genres effect. From Figure 2.2, we can see that regularization has minor impact on the movie release year effect. The RMSE result approves this.  
 ```{r echo=FALSE}
 ##########################################################################################################
 #

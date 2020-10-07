@@ -824,9 +824,9 @@ rmse_results %>% knitr::kable()
 
 ##########################################################################################################
 #
-# Predict the rating using final method 6: 
+# Predict the rating using the final model: 
 # Regularized Movie + User + Genres + Review Year + Movie Release Year Effect Model 
-# Using lambda lambda_model6 that gives the lowest RMSE from the final model
+# Using lambda lambda_model6 that gives the lowest RMSE in the model of Method 6
 # Dataset: whole edx dataset for training, validation for testing
 #
 ##########################################################################################################
